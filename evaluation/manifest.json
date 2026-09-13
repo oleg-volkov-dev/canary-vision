@@ -1,0 +1,55 @@
+{
+  "name": "canary-smoke-v1",
+  "description": "Four fixed public domain/CC0 photographs. A small regression check, not a representative accuracy benchmark.",
+  "min_top1_accuracy": 0.75,
+  "min_top3_accuracy": 0.75,
+  "samples": [
+    {
+      "id": "chelsea",
+      "file": "images/chelsea.png",
+      "title": "Chelsea the cat",
+      "expected_labels": ["tabby", "tiger cat", "Egyptian cat"],
+      "label_note": "ImageNet splits domestic cats into these overlapping visual categories; any of the three is an accepted domestic-cat label.",
+      "sha256": "596aa1e7cb875eb79f437e310381d26b338a81c2da23439704a73c4651e8c4bb",
+      "author": "Stefan van der Walt",
+      "license": "CC0-1.0",
+      "source": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/chelsea.png",
+      "license_source": "https://scikit-image.org/docs/0.25.x/api/skimage.data.html#skimage.data.chelsea"
+    },
+    {
+      "id": "coffee",
+      "file": "images/coffee.png",
+      "title": "Coffee at Pikolo Espresso Bar",
+      "expected_labels": ["espresso"],
+      "sha256": "cc02f8ca188b167c775a7101b5d767d1e71792cf762c33d6fa15a4599b5a8de7",
+      "author": "Rachel Michetti",
+      "license": "CC0-1.0",
+      "source": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/coffee.png",
+      "license_source": "https://scikit-image.org/docs/0.25.x/api/skimage.data.html#skimage.data.coffee"
+    },
+    {
+      "id": "clock",
+      "file": "images/clock.png",
+      "title": "Wall clock in motion",
+      "expected_labels": ["analog clock", "wall clock"],
+      "label_note": "Both ImageNet labels describe the pictured analog wall clock; motion blur is intentionally retained.",
+      "sha256": "f029226b28b642e80113d86622e9b215ee067a0966feaf5e60604a1e05733955",
+      "author": "Stefan van der Walt",
+      "license": "Public domain",
+      "source": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/clock_motion.png",
+      "license_source": "https://scikit-image.org/docs/0.25.x/api/skimage.data.html#skimage.data.clock"
+    },
+    {
+      "id": "camera",
+      "file": "images/camera.png",
+      "title": "Camera and tripod",
+      "expected_labels": ["tripod", "reflex camera"],
+      "label_note": "The photograph contains both a camera and a tripod; either pictured ImageNet object is accepted.",
+      "sha256": "b0793d2adda0fa6ae899c03989482bff9a42d3d5690fc7e3648f2795d730c23a",
+      "author": "Lav Varshney",
+      "license": "CC0-1.0",
+      "source": "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.25.2/skimage/data/camera.png",
+      "license_source": "https://scikit-image.org/docs/0.25.x/api/skimage.data.html#skimage.data.camera"
+    }
+  ]
+}

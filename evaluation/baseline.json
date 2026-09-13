@@ -1,0 +1,118 @@
+{
+  "dataset": "canary-smoke-v1",
+  "dataset_manifest_sha256": "0a34a9bc753aa2aec1665e39563875caf58a12e54ac2f24810f03b6722e946b6",
+  "model_version": "mobilenet-v3-small-imagenet1k-v1-047dcff4",
+  "weights_sha256": "047dcff4addef86ea5bc2eff13c9614dc11f47ab1160d0a71a25e7db994f4e1f",
+  "generated_at": "2026-09-13T14:16:40.754718+00:00",
+  "environment": {
+    "python": "3.13.14",
+    "torch": "2.9.1",
+    "torchvision": "0.24.1",
+    "device": "cpu",
+    "platform": "macOS-15.6-arm64-arm-64bit-Mach-O"
+  },
+  "sample_count": 4,
+  "top1_accuracy": 0.75,
+  "top3_accuracy": 1.0,
+  "min_top1_accuracy": 0.75,
+  "min_top3_accuracy": 0.75,
+  "passed": true,
+  "results": [
+    {
+      "id": "chelsea",
+      "expected_labels": [
+        "tabby",
+        "tiger cat",
+        "Egyptian cat"
+      ],
+      "predictions": [
+        {
+          "label": "tiger cat",
+          "score": 0.49308544397354126
+        },
+        {
+          "label": "Egyptian cat",
+          "score": 0.29658758640289307
+        },
+        {
+          "label": "tabby",
+          "score": 0.20923000574111938
+        }
+      ],
+      "top1_correct": true,
+      "top3_correct": true,
+      "inference_ms": 27.02
+    },
+    {
+      "id": "coffee",
+      "expected_labels": [
+        "espresso"
+      ],
+      "predictions": [
+        {
+          "label": "espresso",
+          "score": 0.9639945030212402
+        },
+        {
+          "label": "consomme",
+          "score": 0.01521249208599329
+        },
+        {
+          "label": "chocolate sauce",
+          "score": 0.0077917445451021194
+        }
+      ],
+      "top1_correct": true,
+      "top3_correct": true,
+      "inference_ms": 26.76
+    },
+    {
+      "id": "clock",
+      "expected_labels": [
+        "analog clock",
+        "wall clock"
+      ],
+      "predictions": [
+        {
+          "label": "bubble",
+          "score": 0.3021363317966461
+        },
+        {
+          "label": "spotlight",
+          "score": 0.18523359298706055
+        },
+        {
+          "label": "wall clock",
+          "score": 0.112347811460495
+        }
+      ],
+      "top1_correct": false,
+      "top3_correct": true,
+      "inference_ms": 26.31
+    },
+    {
+      "id": "camera",
+      "expected_labels": [
+        "tripod",
+        "reflex camera"
+      ],
+      "predictions": [
+        {
+          "label": "tripod",
+          "score": 0.9853907823562622
+        },
+        {
+          "label": "binoculars",
+          "score": 0.008865654468536377
+        },
+        {
+          "label": "microphone",
+          "score": 0.00143723888322711
+        }
+      ],
+      "top1_correct": true,
+      "top3_correct": true,
+      "inference_ms": 26.77
+    }
+  ]
+}
