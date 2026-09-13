@@ -22,7 +22,7 @@ def test_corrupted_weights_fail_before_loading(tmp_path):
 @pytest.mark.integration
 @pytest.mark.skipif(not model_path().is_file(), reason="Run scripts.prepare_model first")
 def test_real_model_api_and_preprocessing():
-    # A real fixture protects the model/transform/label wiring; HTTP tests use a fake.
+    # Check preprocessing and label mapping against the pretrained model.
     image = Path("evaluation/images/coffee.png").read_bytes()
     with TestClient(create_app()) as client:
         assert client.get("/ready").json()["status"] == "ready"

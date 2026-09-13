@@ -1,25 +1,30 @@
-# Fixed evaluation images
+# Evaluation dataset
 
-`manifest.json` defines four unchanged scikit-image v0.25.2 images with human
-labels, source URLs, redistribution permissions, and SHA-256 checksums.
-The images are committed so evaluation never downloads a changing dataset.
+Four fixed scikit-image v0.25.2 photographs. The
+[manifest](manifest.json) records accepted ImageNet labels, source URLs,
+authors, redistribution permissions, and SHA-256 checksums.
 
-Chelsea is CC0 by Stefan van der Walt; coffee is CC0 by Rachel Michetti, courtesy
-of Pikolo Espresso Bar; camera is CC0 by Lav Varshney; the clock was released into
-the public domain by Stefan van der Walt. The permissions are documented in
-[scikit-image's official data documentation](https://scikit-image.org/docs/0.25.x/api/skimage.data.html).
-The [CC0 dedication](https://creativecommons.org/publicdomain/zero/1.0/) permits
-redistribution and modification. The camera image is the replacement introduced
-in scikit-image 0.18, not the earlier image with copyright restrictions.
+| Image | Author | Permission | Accepted labels |
+| --- | --- | --- | --- |
+| Chelsea | Stefan van der Walt | CC0 | tabby, tiger cat, Egyptian cat |
+| Coffee | Rachel Michetti, courtesy of Pikolo Espresso Bar | CC0 | espresso |
+| Clock | Stefan van der Walt | Public domain | analog clock, wall clock |
+| Camera | Lav Varshney | CC0 | tripod, reflex camera |
 
-Labels describe the visible objects before running the model. Multiple accepted
-labels are documented where ImageNet divides domestic cats into visually
-overlapping categories, or the photograph has two applicable object labels.
-An image counts once, regardless of the number of accepted labels. We do not
-relabel a model mistake to make the gate pass.
+Permissions are documented in
+[scikit-image's data reference](https://scikit-image.org/docs/0.25.x/api/skimage.data.html).
+[CC0](https://creativecommons.org/publicdomain/zero/1.0/) permits redistribution
+and modification. The camera fixture is the CC0 replacement introduced in
+scikit-image 0.18.
 
-The required top-1 and top-3 accuracy is **75%** (at least three of four images
-for each metric). Blur and multi-object scenes make this a useful small smoke
-test, but these four images are neither independent of model selection nor
-representative of production use. Passing is evidence against an obvious
-regression, not proof of general accuracy or calibrated confidence.
+Multiple labels accommodate overlapping domestic-cat categories or multiple
+visible objects. Each image counts once. The manifest records the label rationale.
+
+Evaluation requires **75% top-1** and **75% top-3** accuracy: at least three of
+four samples for each metric. The [recorded baseline](baseline.json) reaches
+75% and 100%, respectively. The blurred clock is classified as `bubble` first
+and `wall clock` third.
+
+This collection is a regression smoke test. Its small size, limited coverage,
+and use during development make it unsuitable for estimating deployment accuracy
+or calibrating confidence scores.

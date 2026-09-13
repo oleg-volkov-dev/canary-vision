@@ -1,4 +1,4 @@
-"""Verify health, readiness, webpage, and real inference using only the stdlib."""
+"""Check health, readiness, the webpage, and model inference."""
 
 import argparse
 import json

@@ -24,7 +24,7 @@ def model_path() -> Path:
 
 
 class Classifier:
-    """Load verified weights once; never download anything during API startup."""
+    """CPU classifier using checksum-verified local weights."""
 
     version = MODEL_VERSION
 
@@ -44,7 +44,7 @@ class Classifier:
         self._transform = WEIGHTS.transforms()
         self._labels = WEIGHTS.meta["categories"]
         self._lock = Lock()
-        # Warm up before becoming ready; the first request is a normal inference.
+        # Warm up before reporting readiness.
         with torch.inference_mode():
             self._model(torch.zeros(1, 3, 224, 224))
         LOGGER.info("Loaded %s on CPU; weights sha256=%s", self.version, digest)

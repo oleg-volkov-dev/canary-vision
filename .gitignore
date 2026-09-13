@@ -10,3 +10,16 @@ artifacts/
 playwright-report/
 test-results/
 
+# Local workspace notes and tool settings
+.local-notes/
+.agents/
+.codex/
+/IDEA.md
+/BUILD_PLAN.md
+
+# Local configuration
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/

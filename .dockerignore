@@ -12,3 +12,10 @@ tests
 .github
 *.md
 .DS_Store
+.local-notes
+.agents
+.codex
+.env
+.env.*
+.vscode
+.idea

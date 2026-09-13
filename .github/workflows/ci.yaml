@@ -26,13 +26,13 @@ jobs:
           uv run --frozen ruff format --check .
       - name: Prepare verified model
         run: uv run --frozen python -m scripts.prepare_model
-      - name: API, validation, and real-model tests
+      - name: API and model tests
         run: uv run --frozen pytest -q --junitxml=artifacts/junit.xml
       - name: Fixed dataset regression gate
         run: uv run --frozen python -m scripts.evaluate --output artifacts/evaluation.json
       - name: Install test browser
         run: uv run --frozen --group browser playwright install --with-deps chromium
-      - name: Real browser workflow
+      - name: Browser checks
         run: |
           uv run --frozen uvicorn canary_vision.app:app --host 127.0.0.1 --port 8000 > artifacts/server.log 2>&1 &
           canary_server_pid=$!
@@ -64,7 +64,7 @@ jobs:
           docker exec canary-ci python -m scripts.evaluate --output /tmp/evaluation.json
           mkdir -p artifacts
           docker cp canary-ci:/tmp/evaluation.json artifacts/container-evaluation.json
-      - name: Save container evidence
+      - name: Save container logs
         if: always()
         run: |
           mkdir -p artifacts

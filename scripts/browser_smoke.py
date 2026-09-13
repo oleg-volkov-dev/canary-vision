@@ -1,4 +1,4 @@
-"""Exercise the real playground and capture desktop/mobile screenshots."""
+"""Check the upload workflow and capture desktop/mobile screenshots."""
 
 import argparse
 import base64
@@ -28,7 +28,7 @@ def main() -> None:
         expect(page.locator("#run-inference")).to_be_disabled()
         page.screenshot(path=str(output / "empty.png"), full_page=True)
 
-        # Upload a real file through the native input, run the real API, and export it.
+        # File upload, inference, and JSON export.
         page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
         expect(page.locator("#run-inference")).to_be_enabled()
         expect(page.locator("#preview")).to_be_visible()
@@ -56,7 +56,7 @@ def main() -> None:
         expect(page.locator("#preview-wrap")).to_be_hidden()
         expect(page.locator("#result-empty")).to_be_visible()
 
-        # Exercise drag and drop with an actual File in a browser DataTransfer.
+        # Drag and drop through a browser DataTransfer.
         page.evaluate(
             """(encoded) => {
                 const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));

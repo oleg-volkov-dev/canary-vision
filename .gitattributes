@@ -1,0 +1,2 @@
+# Collapse the generated dependency lockfile in GitHub diffs.
+uv.lock linguist-generated=true
