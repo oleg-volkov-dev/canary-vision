@@ -1,0 +1,80 @@
+name: Checks
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          version: "0.12.13"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked --group browser
+      - name: Lint and format
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+      - name: Prepare verified model
+        run: uv run --frozen python -m scripts.prepare_model
+      - name: API, validation, and real-model tests
+        run: uv run --frozen pytest -q --junitxml=artifacts/junit.xml
+      - name: Fixed dataset regression gate
+        run: uv run --frozen python -m scripts.evaluate --output artifacts/evaluation.json
+      - name: Install test browser
+        run: uv run --frozen --group browser playwright install --with-deps chromium
+      - name: Real browser workflow
+        run: |
+          uv run --frozen uvicorn canary_vision.app:app --host 127.0.0.1 --port 8000 > artifacts/server.log 2>&1 &
+          canary_server_pid=$!
+          trap 'kill "$canary_server_pid"' EXIT
+          uv run --frozen python -m scripts.smoke
+          uv run --frozen --group browser python -m scripts.browser_smoke
+      - name: Save evaluation, tests, and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: checks
+          path: artifacts/
+          retention-days: 14
+
+  container:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build CPU container
+        run: docker build -t canary-vision:ci .
+      - name: Verify offline startup and inference
+        run: |
+          docker run -d --name canary-ci --network none --read-only --tmpfs /tmp:size=32m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true canary-vision:ci
+          docker exec canary-ci python -m scripts.smoke
+          docker exec canary-ci python -m scripts.evaluate --output /tmp/evaluation.json
+          mkdir -p artifacts
+          docker cp canary-ci:/tmp/evaluation.json artifacts/container-evaluation.json
+      - name: Save container evidence
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker logs canary-ci > artifacts/container.log 2>&1 || true
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: container
+          path: artifacts/
+          retention-days: 14
+      - name: Clean up
+        if: always()
+        run: docker rm -f canary-ci || true
