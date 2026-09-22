@@ -63,7 +63,7 @@ jobs:
           docker exec canary-ci python -m scripts.smoke
           docker exec canary-ci python -m scripts.evaluate --output /tmp/evaluation.json
           mkdir -p artifacts
-          docker cp canary-ci:/tmp/evaluation.json artifacts/container-evaluation.json
+          docker exec canary-ci cat /tmp/evaluation.json > artifacts/container-evaluation.json
       - name: Save container logs
         if: always()
         run: |
