@@ -8,6 +8,8 @@ from canary_vision.model import MODEL_VERSION
 class FakeClassifier:
     """Keep HTTP input tests fast and independent of model/network downloads."""
 
+    version = MODEL_VERSION
+
     def predict(self, image):
         assert image.mode == "RGB"
         return {

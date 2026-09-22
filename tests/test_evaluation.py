@@ -35,6 +35,8 @@ def dataset(tmp_path):
 
 
 class SequenceClassifier:
+    version = "test-model"
+
     def __init__(self, labels):
         self.labels = iter(labels)
 

@@ -122,6 +122,8 @@ def test_model_is_loaded_once():
 
 def test_inference_failure_returns_safe_error():
     class BrokenClassifier:
+        version = "broken"
+
         def predict(self, image):
             raise RuntimeError("private internals")
 
