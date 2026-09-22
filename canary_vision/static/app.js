@@ -278,6 +278,50 @@ function paragraph(text) {
   return p;
 }
 
+async function renderRollout(action = null) {
+  const content = $("dialog-content");
+  content.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  try {
+    const data = await fetchJson(action ? `/rollout/${action}` : "/rollout", {
+      method: action ? "POST" : "GET",
+    });
+    if ($("info-dialog").dataset.kind !== "rollout") return;
+    content.replaceChildren(
+      paragraph("Send a small share of uploads to a candidate, then check the fixed dataset before increasing traffic. A failed check automatically restores the stable release."),
+      detailGrid([
+        ["STATUS", data.status.replaceAll("_", " ")],
+        ["CANDIDATE TRAFFIC", `${data.candidate_percent}%`],
+        ["STABLE", data.stable_version],
+        ["CANDIDATE", data.candidate_version || "None"],
+      ]),
+    );
+    if (data.reason) content.append(paragraph(data.reason));
+    data.checks.forEach((check) => content.append(paragraph(
+      `${check.candidate_percent}% stage: top-1 ${(check.top1_accuracy * 100).toFixed(0)}%, top-3 ${(check.top3_accuracy * 100).toFixed(0)}% — ${check.passed ? "passed" : "failed"}`,
+    )));
+    const actions = data.candidate_version
+      ? [["advance", "Check and advance"], ["rollback", "Roll back"]]
+      : [["good", "Start good release"], ["bad", "Start bad release"]];
+    actions.forEach(([action, label]) => {
+      if (action === "good" && data.stable_version.endsWith("-good-v2")) return;
+      const button = document.createElement("button");
+      button.className = "run-button";
+      button.textContent = label;
+      button.addEventListener("click", () => renderRollout(action));
+      content.append(button);
+    });
+    content.append(paragraph("Local demo: one API process, state resets on restart. The bad release deliberately shifts class labels. Each gate requires 75% top-1 and top-3 accuracy on four images."));
+  } catch (error) {
+    if ($("info-dialog").dataset.kind !== "rollout") return;
+    content.replaceChildren(paragraph(error.message));
+    const retry = document.createElement("button");
+    retry.className = "text-button";
+    retry.textContent = "Refresh rollout status";
+    retry.addEventListener("click", () => renderRollout());
+    content.append(retry);
+  }
+}
+
 async function openDialog(kind) {
   const dialog = $("info-dialog");
   $("dialog-content").replaceChildren(paragraph("Loading…"));
@@ -287,6 +331,12 @@ async function openDialog(kind) {
     kind === "model" ? "MobileNetV3 Small" : "Evaluation results";
   if (!dialog.open) dialog.showModal();
   dialog.dataset.kind = kind;
+  if (kind === "rollout") {
+    $("dialog-eyebrow").textContent = "RELEASE CONTROL";
+    $("dialog-title").textContent = "Canary rollout";
+    await renderRollout();
+    return;
+  }
   try {
     const data = await fetchJson(kind === "model" ? "/model" : "/evaluation", {
       signal: AbortSignal.timeout(5000),

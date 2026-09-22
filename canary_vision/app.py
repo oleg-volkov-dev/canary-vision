@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -18,7 +18,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from canary_vision import __version__
 from canary_vision.images import MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, decode_image
-from canary_vision.model import MODEL_VERSION, WEIGHTS, WEIGHTS_SHA256, Classifier
+from canary_vision.model import WEIGHTS, WEIGHTS_SHA256, Classifier
+from canary_vision.rollout import Rollout
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class BodyLimitMiddleware:
 def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.classifier = classifier_factory()
+        app.state.classifier = Rollout(classifier_factory(), ROOT / "evaluation" / "manifest.json")
         yield
         app.state.classifier = None
 
@@ -121,6 +122,8 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/rollout/"):
+            return error_response(422, "invalid_action", "Choose good, bad, advance, or rollback.")
         return error_response(
             422, "invalid_request", "Send an image in the multipart field named 'file'."
         )
@@ -133,13 +136,17 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
     def ready(request: Request):
         if request.app.state.classifier is None:
             return error_response(503, "model_not_ready", "The model is not ready yet.")
-        return {"status": "ready", "model_version": MODEL_VERSION, "device": "cpu"}
+        return {
+            "status": "ready",
+            "model_version": request.app.state.classifier.snapshot()["stable_version"],
+            "device": "cpu",
+        }
 
     @app.get("/model", tags=["Service"])
-    def model_info():
+    def model_info(request: Request):
         return {
             "name": "MobileNetV3 Small",
-            "model_version": MODEL_VERSION,
+            "model_version": request.app.state.classifier.snapshot()["stable_version"],
             "weights": "IMAGENET1K_V1",
             "weights_sha256": WEIGHTS_SHA256,
             "device": "cpu",
@@ -150,6 +157,14 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
             "max_upload_bytes": MAX_UPLOAD_BYTES,
             "max_image_pixels": MAX_IMAGE_PIXELS,
         }
+
+    @app.get("/rollout", tags=["Rollout"])
+    def rollout_status(request: Request):
+        return request.app.state.classifier.snapshot()
+
+    @app.post("/rollout/{action}", tags=["Rollout"])
+    def rollout_change(action: Literal["good", "bad", "advance", "rollback"], request: Request):
+        return request.app.state.classifier.change(action)
 
     @app.post("/predict", response_model=PredictionResponse, tags=["Inference"])
     def predict(

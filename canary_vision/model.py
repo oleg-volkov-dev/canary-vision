@@ -66,3 +66,26 @@ class Classifier:
             "model_version": self.version,
             "inference_ms": elapsed,
         }
+
+
+class Release:
+    """A release sharing verified inference weights, with an optional label-map defect."""
+
+    def __init__(self, classifier, name: str):
+        if name not in {"stable", "good", "bad"}:
+            raise ValueError(f"Unknown release: {name}")
+        self.classifier = classifier
+        self.name = name
+        self.version = classifier.version + (f"-{name}-v2" if name != "stable" else "")
+        labels = WEIGHTS.meta["categories"]
+        self._mapping = dict(zip(labels, labels[1:] + labels[:1], strict=True))
+
+    def predict(self, image: Image.Image) -> dict:
+        result = self.classifier.predict(image)
+        predictions = result["predictions"]
+        if self.name == "bad":
+            predictions = [
+                {**prediction, "label": self._mapping[prediction["label"]]}
+                for prediction in predictions
+            ]
+        return {**result, "predictions": predictions, "model_version": self.version}
