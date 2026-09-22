@@ -23,6 +23,44 @@ and model weights; the finished container runs without external network access.
 For native setup, configuration, and browser checks, see the
 [development guide](docs/development.md).
 
+## Canary rollout
+
+Open **Canary rollout** in the sidebar (or **Manage canary rollout** below the
+playground). Start a good or bad release, then use **Check and advance**:
+
+- Candidate uploads receive 10%, then 50%, then 100% of traffic, selected randomly
+  per request. Each prediction identifies the release that served it.
+- Each advance evaluates the candidate directly against the fixed dataset. Both
+  accuracy gates must pass; a final check at 100% promotes the candidate.
+- A failed gate or evaluation error withdraws the candidate and restores all new
+  requests to the previous stable release. Manual rollback is also available
+  while a candidate is active. Requests already running may finish on that candidate.
+
+The good release preserves baseline behavior. The deliberately bad release shifts
+ImageNet labels by one position, reproducing a label-map packaging defect while
+sharing the same verified weights. No extra weights or downloads are needed.
+
+```sh
+curl -X POST http://localhost:8000/rollout/bad
+curl -X POST http://localhost:8000/rollout/advance
+curl http://localhost:8000/rollout
+```
+
+The second command returns `rolled_back` with the failing evaluation report.
+For a successful rollout, start `good` and advance three times. To evaluate the
+bad release offline (expected exit code **1**):
+
+```sh
+uv run --frozen python -m scripts.evaluate --release bad --output artifacts/bad-evaluation.json
+```
+
+This is a local, single-process rollout lab. Run one Uvicorn worker; state and
+reports are kept in memory and restart resets to the original stable release.
+Controls are unauthenticated and intended for the loopback-bound local service.
+Advancement is operator-triggered; rollback after a failed check is automatic.
+The gate uses labeled samples, not accuracy inferred from user uploads. The
+bundled `/evaluation` report continues to describe the original baseline.
+
 ## API
 
 ```sh
@@ -52,6 +90,8 @@ Example response; timing varies by machine:
 | `GET /ready` | Model readiness and version. |
 | `GET /model` | Model metadata and input limits. |
 | `GET /evaluation` | Recorded evaluation report. |
+| `GET /rollout` | Current traffic split, release versions, and gate reports. |
+| `POST /rollout/{action}` | `good`, `bad`, `advance`, or `rollback`. |
 | `GET /samples` | Sample images and attribution. |
 
 Accepts static JPEG, PNG, and WebP images up to **10 MiB** and **20 megapixels**.

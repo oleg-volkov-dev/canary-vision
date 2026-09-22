@@ -106,6 +106,21 @@ def main() -> None:
         expect(page.locator("#dialog-content")).to_contain_text("75%")
         page.keyboard.press("Escape")
 
+        page.locator(".nav-item[data-dialog='rollout']").click()
+        page.get_by_role("button", name="Start bad release", exact=True).click()
+        expect(page.locator("#dialog-content")).to_contain_text("10%")
+        page.get_by_role("button", name="Check and advance", exact=True).click()
+        expect(page.locator("#dialog-content")).to_contain_text("rolled back")
+        expect(page.locator("#dialog-content")).to_contain_text("failed")
+        page.get_by_role("button", name="Start good release", exact=True).click()
+        for percent in ["50%", "100%"]:
+            page.get_by_role("button", name="Check and advance", exact=True).click()
+            expect(page.locator("#dialog-content")).to_contain_text(percent)
+        page.get_by_role("button", name="Check and advance", exact=True).click()
+        expect(page.locator("#dialog-content")).to_contain_text("promoted")
+        page.screenshot(path=str(output / "rollout.png"), full_page=True)
+        page.keyboard.press("Escape")
+
         page.set_viewport_size({"width": 390, "height": 844})
         page.locator("#run-inference").click()
         expect(page.locator("#prediction-content")).to_be_visible()
