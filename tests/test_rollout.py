@@ -95,3 +95,118 @@ def test_real_rollout_promotion_and_bad_release_rollback(monkeypatch):
         assert restored["model_version"] == promoted
         assert restored["predictions"][0]["label"] == "espresso"
         assert client.get("/rollout").json() == report
+
+
+def wait_for_status(rollout, status):
+    from time import monotonic, sleep
+
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        snapshot = rollout.snapshot()
+        if snapshot["status"] == status:
+            return snapshot
+        sleep(0.01)
+    pytest.fail(f"Expected {status}; got {rollout.snapshot()}")
+
+
+@pytest.mark.parametrize("passed, outcome", [(True, "promoted"), (False, "rolled_back")])
+def test_automatic_rollout_completes_without_browser(monkeypatch, passed, outcome):
+    monkeypatch.setattr("canary_vision.rollout.evaluate", lambda *args: {"passed": passed})
+    rollout = Rollout(FakeClassifier(), Path("unused"), stage_seconds=0.01)
+    try:
+        start = rollout.change("good" if passed else "bad", automatic=True)
+        report = wait_for_status(rollout, outcome)
+        assert report["candidate_percent"] == 0
+        assert report["automatic"] is False
+        assert report["last_candidate_version"] == start["candidate_version"]
+        assert report["previous_version"] == MODEL_VERSION
+        assert [c["candidate_percent"] for c in report["checks"]] == (
+            [10, 50, 100] if passed else [10]
+        )
+        assert report["stable_version"] == (start["candidate_version"] if passed else MODEL_VERSION)
+    finally:
+        rollout.close()
+
+
+def test_automatic_gate_error_restores_stable():
+    rollout = Rollout(FakeClassifier(), Path("missing"), stage_seconds=0.01)
+    try:
+        rollout.change("bad", automatic=True)
+        report = wait_for_status(rollout, "rolled_back")
+        assert report["stable_version"] == MODEL_VERSION
+        assert "could not complete" in report["reason"]
+    finally:
+        rollout.close()
+
+
+def test_manual_stop_cancels_automatic_checks(monkeypatch):
+    from time import sleep
+
+    checks = []
+    monkeypatch.setattr("canary_vision.rollout.evaluate", lambda *args: checks.append(1))
+    rollout = Rollout(FakeClassifier(), Path("unused"), stage_seconds=0.05)
+    try:
+        rollout.change("good", automatic=True)
+        with pytest.raises(HTTPException, match="already running"):
+            rollout.change("advance")
+        rollout.change("rollback")
+        sleep(0.1)
+        assert not checks
+        assert rollout.snapshot()["status"] == "rolled_back"
+    finally:
+        rollout.close()
+
+
+def test_invalid_model_upload_preserves_stable(client):
+    from io import BytesIO
+
+    import torch
+
+    invalid_dict = BytesIO()
+    torch.save({"wrong_key": torch.zeros(2)}, invalid_dict)
+    nonfinite = BytesIO()
+    torch.save({"weights": torch.tensor([float("nan")])}, nonfinite)
+    for content in [b"", b"not weights", invalid_dict.getvalue(), nonfinite.getvalue()]:
+        response = client.post("/rollout/upload", files={"file": ("custom.pth", content)})
+        assert response.status_code == 422
+        assert client.get("/rollout").json()["status"] == "idle"
+    assert client.post("/rollout/upload").status_code == 422
+    response = client.post(
+        "/rollout/upload", content=b"x", headers={"content-length": str(33 * 1024 * 1024)}
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "model_too_large"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not model_path().is_file(), reason="Run scripts.prepare_model first")
+def test_uploaded_model_promotes_and_failed_preset_restores_it():
+    import hashlib
+    from io import BytesIO
+
+    import torch
+
+    weights = torch.load(model_path(), map_location="cpu", weights_only=True)
+    weights["classifier.3.bias"] += 0.25  # Same ranking, different checkpoint checksum.
+    buffer = BytesIO()
+    torch.save(weights, buffer)
+    content = buffer.getvalue()
+    digest = hashlib.sha256(content).hexdigest()
+    with TestClient(create_app(Classifier)) as client:
+        rollout = client.app.state.classifier
+        rollout._stage_seconds = 0.01
+        response = client.post("/rollout/upload", files={"file": ("own-model.pth", content)})
+        assert response.status_code == 200
+        uploaded = response.json()["candidate_version"]
+        assert "custom" in uploaded
+        report = wait_for_status(rollout, "promoted")
+        assert report["stable_version"] == uploaded
+        assert all(check["passed"] for check in report["checks"])
+        assert all(check["weights_sha256"] == digest for check in report["checks"])
+        metadata = client.get("/model").json()
+        assert metadata["weights_sha256"] == digest
+        assert metadata["weights"] == "Uploaded state dict"
+        assert client.post("/rollout/start/bad").status_code == 200
+        report = wait_for_status(rollout, "rolled_back")
+        assert report["stable_version"] == uploaded
+        assert not report["checks"][0]["passed"]

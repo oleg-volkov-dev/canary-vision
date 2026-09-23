@@ -7,6 +7,8 @@ from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
 
+from canary_vision.model import model_path
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -92,6 +94,7 @@ def main() -> None:
         expect(page.locator("#error-message")).to_contain_text("not ready")
         expect(page.locator("#run-inference")).to_be_enabled()
         page.unroute("**/predict")
+        page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
 
         # Model card is keyboard dismissible and populated by backend metadata.
         page.locator(".nav-item[data-dialog='model']").click()
@@ -106,20 +109,58 @@ def main() -> None:
         expect(page.locator("#dialog-content")).to_contain_text("75%")
         page.keyboard.press("Escape")
 
-        page.locator(".nav-item[data-dialog='rollout']").click()
-        page.get_by_role("button", name="Start bad release", exact=True).click()
-        expect(page.locator("#dialog-content")).to_contain_text("10%")
-        page.get_by_role("button", name="Check and advance", exact=True).click()
-        expect(page.locator("#dialog-content")).to_contain_text("rolled back")
-        expect(page.locator("#dialog-content")).to_contain_text("failed")
-        page.get_by_role("button", name="Start good release", exact=True).click()
-        for percent in ["50%", "100%"]:
-            page.get_by_role("button", name="Check and advance", exact=True).click()
-            expect(page.locator("#dialog-content")).to_contain_text(percent)
-        page.get_by_role("button", name="Check and advance", exact=True).click()
-        expect(page.locator("#dialog-content")).to_contain_text("promoted")
+        # Automatic presets show traffic, gate evidence, and the final outcome.
+        page.locator("#show-rollout").click()
+        expect(page.locator(".model-option")).to_have_count(3)
+        page.locator('[name="preset"][value="bad"]').check()
+        page.locator("#start-rollout").click()
+        expect(page.locator("#traffic-caption")).to_contain_text("Candidate 10%")
+        expect(page.locator("#rollout-result-title")).to_contain_text(
+            "Automatic rollback", timeout=15000
+        )
+        expect(page.locator("#traffic-caption")).to_have_text("Stable 100% · Candidate 0%")
+        expect(page.locator(".gate-fail")).to_have_count(1)
+        page.wait_for_function(
+            "document.getElementById('candidate-traffic').getBoundingClientRect().width < 1"
+        )
+        page.screenshot(path=str(output / "rollback.png"), full_page=True)
+        page.locator('[name="preset"][value="good"]').check()
+        page.locator("#start-rollout").click()
+        expect(page.locator("#traffic-caption")).to_contain_text("Candidate 50%", timeout=15000)
+        page.screenshot(path=str(output / "rollout-progress.png"), full_page=True)
+        expect(page.locator("#rollout-result-title")).to_contain_text(
+            "Rollout successful", timeout=20000
+        )
+        expect(page.locator(".gate-pass")).to_have_count(3)
+        expect(page.locator("#current-model-name")).to_have_text("Reliable release")
+        page.wait_for_function(
+            "document.getElementById('candidate-traffic').getBoundingClientRect().width < 1"
+        )
         page.screenshot(path=str(output / "rollout.png"), full_page=True)
-        page.keyboard.press("Escape")
+
+        # Invalid custom weights leave the promoted model in place and allow retry.
+        page.locator('[name="model-source"][value="upload"]').check()
+        expect(page.locator("#start-rollout")).to_be_disabled()
+        page.locator("#model-file").set_input_files(
+            {"name": "invalid.pth", "mimeType": "application/octet-stream", "buffer": b"bad"}
+        )
+        page.locator("#start-rollout").click()
+        expect(page.locator("#rollout-error")).to_contain_text("Could not load model")
+        expect(page.locator("#current-model-name")).to_have_text("Reliable release")
+        expect(page.locator("#start-rollout")).to_be_enabled()
+
+        # A real custom upload continues running across a page reload.
+        page.locator("#model-file").set_input_files(model_path())
+        page.locator("#start-rollout").click()
+        expect(page.locator("#traffic-caption")).to_contain_text("Candidate 10%")
+        page.reload()
+        expect(page.locator("#rollout-result-title")).to_contain_text(
+            "Rollout successful", timeout=20000
+        )
+        expect(page.locator("#current-model-name")).to_have_text("Your uploaded model")
+        expect(page.locator(".gate-pass")).to_have_count(3)
+        page.locator('[name="model-source"][value="preset"]').check()
+        page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.locator("#run-inference").click()
