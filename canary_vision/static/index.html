@@ -100,7 +100,7 @@
         <button class="nav-item" data-dialog="evaluation">
           <svg class="icon"><use href="#i-chart" /></svg> Evaluation
         </button>
-        <button class="nav-item" data-dialog="rollout">
+        <button class="nav-item" id="show-rollout">
           <svg class="icon"><use href="#i-layers" /></svg> Canary rollout
         </button>
         <span class="nav-label resources-label">RESOURCES</span>
@@ -173,6 +173,68 @@
               About the model <svg class="icon"><use href="#i-external" /></svg>
             </button>
           </div>
+        </section>
+
+        <section class="rollout-panel panel" id="rollout-panel" aria-labelledby="rollout-title" tabindex="-1">
+          <div class="rollout-heading">
+            <div><span class="eyebrow">CANARY ROLLOUT</span><h2 id="rollout-title">Roll out a new model</h2>
+            <p>Choose a model. Watch traffic move. See the safety checks work.</p></div>
+            <span class="rollout-badge" id="rollout-badge">Connecting…</span>
+          </div>
+          <fieldset class="model-source" id="model-source">
+            <legend class="visually-hidden">Model source</legend>
+            <label><input type="radio" name="model-source" value="preset" checked /> Preset models</label>
+            <label><input type="radio" name="model-source" value="upload" /> Load your own</label>
+          </fieldset>
+          <div class="model-options" id="model-options" role="group" aria-label="Preset models">
+            <article class="model-option current-model">
+              <span class="model-kicker">● CURRENT MODEL</span><h3 id="current-model-name">Baseline</h3>
+              <p>Your stable model. Kept available throughout the rollout.</p>
+              <code id="current-model-version">Loading version…</code><span class="model-outcome">Serving live traffic</span>
+            </article>
+            <label class="model-option good-model">
+              <span class="model-kicker"><input type="radio" name="preset" value="good" checked /> GOOD PRESET</span>
+              <h3>Reliable release</h3><p>Verified weights and correct labels. Preserves baseline accuracy.</p>
+              <span class="model-outcome">↗ Expected to pass &amp; promote</span>
+            </label>
+            <label class="model-option bad-model">
+              <span class="model-kicker"><input type="radio" name="preset" value="bad" /> BAD PRESET</span>
+              <h3>Broken labels</h3><p>Same weights, shifted labels. A deliberate packaging defect.</p>
+              <span class="model-outcome">↶ Expected automatic rollback</span>
+            </label>
+          </div>
+          <div class="model-upload" id="model-upload" hidden>
+            <label for="model-file">Choose your model weights</label>
+            <p>MobileNetV3 Small state dict (.pth or .pt), up to 32 MiB. Use the standard 1,000 ImageNet classes in their original order and the same preprocessing. Your model goes through the same accuracy gates.</p>
+            <input type="file" id="model-file" accept=".pth,.pt" aria-describedby="model-file-note" />
+            <p id="model-file-note">Export with torch.save(model.state_dict(), "model.pth").</p>
+          </div>
+          <div class="rollout-actions">
+            <button class="rollout-primary" id="start-rollout" disabled>Roll out selected model <span aria-hidden="true">→</span></button>
+            <button class="rollout-secondary" id="rollback-model" hidden>Roll back now</button>
+            <button class="rollout-secondary" id="advance-model" hidden>Check and advance</button>
+            <span>Automatic checks · 75% minimum top-1 &amp; top-3</span>
+          </div>
+          <p class="rollout-error" id="rollout-error" role="alert" hidden></p>
+          <div class="rollout-live">
+            <div class="traffic-heading"><h3>Live traffic</h3><span id="traffic-caption">Stable 100% · Candidate 0%</span></div>
+            <div class="traffic-track" role="img" id="traffic-track" aria-label="Stable 100%, candidate 0%">
+              <div id="stable-traffic" class="stable-traffic" style="width:100%"></div><div id="candidate-traffic" class="candidate-traffic" style="width:0%"></div>
+            </div>
+            <div class="traffic-legend"><span><i></i> Stable model</span><span><i></i> Candidate model</span></div>
+            <ol class="rollout-stages" aria-label="Rollout stages">
+              <li data-stage="10"><strong>01</strong><span>10% traffic</span><small>Waiting</small></li>
+              <li data-stage="50"><strong>02</strong><span>50% traffic</span><small>Waiting</small></li>
+              <li data-stage="100"><strong>03</strong><span>100% traffic</span><small>Waiting</small></li>
+              <li id="rollout-final-stage"><strong>04</strong><span>Promote model</span><small>Waiting</small></li>
+            </ol>
+            <div class="rollout-result" id="rollout-result" role="status" aria-live="polite">
+              <h3 id="rollout-result-title">Ready for a new release</h3>
+              <p id="rollout-result-detail">Start with the good preset to see a successful rollout, or the bad preset to see traffic automatically return to your stable model.</p>
+            </div>
+            <div id="rollout-checks"></div>
+          </div>
+          <p class="rollout-footnote">Presets share the bundled MobileNet weights. Checks use four labeled sample images; uploaded playground images do not determine the gate. Local session · resets on server restart.</p>
         </section>
 
         <div class="playground-grid">
@@ -381,7 +443,6 @@
           </section>
         </div>
 
-        <button class="text-button" data-dialog="rollout">Manage canary rollout</button>
 
         <section class="how-it-works" aria-label="How classification works">
           <span class="how-label mono">UNDER THE HOOD</span>

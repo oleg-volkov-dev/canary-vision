@@ -56,7 +56,7 @@ def evaluate(manifest_path: Path, classifier) -> dict:
         "dataset": manifest["name"],
         "dataset_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "model_version": classifier.version,
-        "weights_sha256": WEIGHTS_SHA256,
+        "weights_sha256": getattr(classifier, "weights_sha256", WEIGHTS_SHA256),
         "generated_at": datetime.now(UTC).isoformat(),
         "environment": {
             "python": platform.python_version(),

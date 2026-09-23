@@ -278,50 +278,6 @@ function paragraph(text) {
   return p;
 }
 
-async function renderRollout(action = null) {
-  const content = $("dialog-content");
-  content.querySelectorAll("button").forEach((button) => { button.disabled = true; });
-  try {
-    const data = await fetchJson(action ? `/rollout/${action}` : "/rollout", {
-      method: action ? "POST" : "GET",
-    });
-    if ($("info-dialog").dataset.kind !== "rollout") return;
-    content.replaceChildren(
-      paragraph("Send a small share of uploads to a candidate, then check the fixed dataset before increasing traffic. A failed check automatically restores the stable release."),
-      detailGrid([
-        ["STATUS", data.status.replaceAll("_", " ")],
-        ["CANDIDATE TRAFFIC", `${data.candidate_percent}%`],
-        ["STABLE", data.stable_version],
-        ["CANDIDATE", data.candidate_version || "None"],
-      ]),
-    );
-    if (data.reason) content.append(paragraph(data.reason));
-    data.checks.forEach((check) => content.append(paragraph(
-      `${check.candidate_percent}% stage: top-1 ${(check.top1_accuracy * 100).toFixed(0)}%, top-3 ${(check.top3_accuracy * 100).toFixed(0)}% — ${check.passed ? "passed" : "failed"}`,
-    )));
-    const actions = data.candidate_version
-      ? [["advance", "Check and advance"], ["rollback", "Roll back"]]
-      : [["good", "Start good release"], ["bad", "Start bad release"]];
-    actions.forEach(([action, label]) => {
-      if (action === "good" && data.stable_version.endsWith("-good-v2")) return;
-      const button = document.createElement("button");
-      button.className = "run-button";
-      button.textContent = label;
-      button.addEventListener("click", () => renderRollout(action));
-      content.append(button);
-    });
-    content.append(paragraph("Local demo: one API process, state resets on restart. The bad release deliberately shifts class labels. Each gate requires 75% top-1 and top-3 accuracy on four images."));
-  } catch (error) {
-    if ($("info-dialog").dataset.kind !== "rollout") return;
-    content.replaceChildren(paragraph(error.message));
-    const retry = document.createElement("button");
-    retry.className = "text-button";
-    retry.textContent = "Refresh rollout status";
-    retry.addEventListener("click", () => renderRollout());
-    content.append(retry);
-  }
-}
-
 async function openDialog(kind) {
   const dialog = $("info-dialog");
   $("dialog-content").replaceChildren(paragraph("Loading…"));
@@ -331,12 +287,6 @@ async function openDialog(kind) {
     kind === "model" ? "MobileNetV3 Small" : "Evaluation results";
   if (!dialog.open) dialog.showModal();
   dialog.dataset.kind = kind;
-  if (kind === "rollout") {
-    $("dialog-eyebrow").textContent = "RELEASE CONTROL";
-    $("dialog-title").textContent = "Canary rollout";
-    await renderRollout();
-    return;
-  }
   try {
     const data = await fetchJson(kind === "model" ? "/model" : "/evaluation", {
       signal: AbortSignal.timeout(5000),
@@ -347,7 +297,10 @@ async function openDialog(kind) {
     if (kind === "model") {
       content.append(
         paragraph(
-          "A lightweight image classifier with pinned, pretrained ImageNet weights. The image is resized to 256 pixels, center-cropped to 224 × 224, and normalized using the weights’ prescribed transforms.",
+          (data.weights === "Uploaded state dict"
+            ? "Your uploaded MobileNetV3 Small weights. "
+            : "A lightweight image classifier with pinned, pretrained ImageNet weights. ") +
+            "The image is resized to 256 pixels, center-cropped to 224 × 224, and normalized using the standard ImageNet transforms.",
         ),
       );
       content.append(
@@ -509,3 +462,152 @@ fetchJson("/model")
     $("app-version").textContent = model.app_version;
   })
   .catch(() => {});
+
+const rollout = { data: null, busy: false, request: 0, checks: "", connected: false };
+const percent = (value) => `${Math.round(value * 100)}%`;
+function rolloutError(message) {
+  $("rollout-error").textContent = message;
+  $("rollout-error").hidden = !message;
+}
+function syncRolloutControls() {
+  const active = Boolean(rollout.data?.candidate_version);
+  const locked = rollout.busy || active || !rollout.connected;
+  document.querySelectorAll('#model-source input, [name="preset"], #model-file')
+    .forEach((input) => { input.disabled = locked; });
+  const upload = document.querySelector('[name="model-source"]:checked').value === "upload";
+  $("model-options").hidden = upload;
+  $("model-upload").hidden = !upload;
+  $("start-rollout").disabled = locked || (upload && !$("model-file").files.length);
+  $("start-rollout").textContent = rollout.busy ? "Working…" : active ? "Rollout in progress…" : "Roll out selected model →";
+  $("rollback-model").hidden = !active;
+  $("rollback-model").disabled = rollout.busy || !rollout.connected || rollout.data?.status === "evaluating";
+  $("advance-model").hidden = !active || rollout.data?.automatic;
+  $("advance-model").disabled = rollout.busy || !rollout.connected || rollout.data?.status === "evaluating";
+}
+function renderRolloutPanel(data) {
+  rollout.data = data;
+  const active = Boolean(data.candidate_version);
+  const failed = data.status === "rolled_back";
+  const promoted = data.status === "promoted";
+  const traffic = data.candidate_percent;
+  const names = { idle: "Stable", canary: "Rolling out", evaluating: "Checking accuracy", promoted: "Promoted", rolled_back: "Rolled back" };
+  $("rollout-badge").textContent = names[data.status] || data.status;
+  $("rollout-panel").dataset.status = data.status;
+  $("current-model-name").textContent = data.stable_version.includes("custom") ? "Your uploaded model" : data.stable_version.includes("good") ? "Reliable release" : "Baseline";
+  $("current-model-version").textContent = data.stable_version;
+  const caption = `Stable ${100 - traffic}% · Candidate ${traffic}%`;
+  $("traffic-caption").textContent = caption;
+  $("traffic-track").setAttribute("aria-label", caption);
+  $("stable-traffic").style.width = `${100 - traffic}%`;
+  $("candidate-traffic").style.width = `${traffic}%`;
+  document.querySelectorAll("[data-stage]").forEach((stage) => {
+    const check = data.checks.find((item) => item.candidate_percent === Number(stage.dataset.stage));
+    const current = active && traffic === Number(stage.dataset.stage);
+    stage.dataset.state = check ? (check.passed ? "passed" : "failed") : current ? "active" : "waiting";
+    stage.querySelector("small").textContent = check ? (check.passed ? "✓ Gate passed" : "× Gate failed") : current ? (data.automatic ? "Checking accuracy…" : "Awaiting check") : failed ? "Skipped" : "Waiting";
+    if (current) stage.setAttribute("aria-current", "step");
+    else stage.removeAttribute("aria-current");
+  });
+  const finalStage = $("rollout-final-stage");
+  finalStage.dataset.state = promoted ? "passed" : failed ? "failed" : "waiting";
+  finalStage.querySelector("span").textContent = failed ? "Restore stable" : "Promote model";
+  finalStage.querySelector("small").textContent = promoted ? "✓ Model is live" : failed ? "↶ Traffic restored" : "Waiting";
+  let title = "Ready for a new release";
+  let detail = "Start with the good preset to see a successful rollout, or the bad preset to see traffic automatically return to your stable model.";
+  if (active) {
+    title = `${traffic}% of traffic routed to the candidate`;
+    detail = `${data.candidate_version} · ${data.automatic ? "Accuracy gates run automatically. You can keep using the playground or leave this page." : "Use Check and advance to evaluate this manually started rollout."}`;
+  } else if (promoted) {
+    title = "Rollout successful — new model is live";
+    detail = `All three accuracy checks passed. ${data.stable_version} now serves 100% of traffic.`;
+  } else if (failed) {
+    title = data.reason?.startsWith("Manual") ? "Rollout stopped — stable model restored" : "Automatic rollback — stable model restored";
+    detail = `${data.reason} ${data.last_candidate_version} was withdrawn. ${data.stable_version} serves 100% of traffic.`;
+  }
+  if ($("rollout-result-title").textContent !== title) $("rollout-result-title").textContent = title;
+  if ($("rollout-result-detail").textContent !== detail) $("rollout-result-detail").textContent = detail;
+  const checks = JSON.stringify(data.checks);
+  if (rollout.checks !== checks) {
+    rollout.checks = checks;
+    const container = $("rollout-checks");
+    container.replaceChildren();
+    if (data.checks.length) {
+      const table = document.createElement("table");
+      table.className = "gate-table";
+      const caption = table.createCaption();
+      caption.textContent = "Accuracy checks · fixed sample dataset";
+      const head = table.createTHead().insertRow();
+      ["Traffic", "Top-1", "Top-3", "Result"].forEach((label) => {
+        const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; head.append(cell);
+      });
+      const body = table.createTBody();
+      data.checks.forEach((check) => {
+        const row = body.insertRow();
+        row.className = check.passed ? "gate-pass" : "gate-fail";
+        [`${check.candidate_percent}%`, `${percent(check.top1_accuracy)} / ${percent(check.min_top1_accuracy)} min`, `${percent(check.top3_accuracy)} / ${percent(check.min_top3_accuracy)} min`, check.passed ? "Passed" : "Failed → rollback"].forEach((value) => { row.insertCell().textContent = value; });
+      });
+      container.append(table);
+      const last = data.checks.at(-1);
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "See what the candidate predicted";
+      details.append(summary);
+      last.results.forEach((sample) => details.append(paragraph(`${sample.id}: ${sample.predictions[0].label} — expected ${sample.expected_labels.join(" or ")} (${sample.top1_correct ? "correct" : "miss"})`)));
+      container.append(details);
+    }
+  }
+  syncRolloutControls();
+}
+async function refreshRollout() {
+  if (rollout.busy) return;
+  const request = ++rollout.request;
+  try {
+    const data = await fetchJson("/rollout", { signal: AbortSignal.timeout(5000) });
+    if (request !== rollout.request) return;
+    rollout.connected = true;
+    renderRolloutPanel(data);
+  } catch (error) {
+    if (request !== rollout.request) return;
+    rollout.connected = false;
+    $("rollout-badge").textContent = "Connection lost · retrying";
+    syncRolloutControls();
+  }
+}
+async function changeRollout(path, body) {
+  if (rollout.busy) return;
+  rollout.busy = true;
+  ++rollout.request;
+  rolloutError("");
+  syncRolloutControls();
+  try {
+    const data = await fetchJson(path, { method: "POST", ...(body ? { body } : {}) });
+    rollout.connected = true;
+    renderRolloutPanel(data);
+  } catch (error) {
+    rolloutError(error.message);
+  } finally {
+    rollout.busy = false;
+    syncRolloutControls();
+    await refreshRollout();
+  }
+}
+$("start-rollout").addEventListener("click", () => {
+  if (document.querySelector('[name="model-source"]:checked').value === "upload") {
+    const file = $("model-file").files[0];
+    if (!file || file.size === 0) return rolloutError("Choose a non-empty model file.");
+    if (file.size > 32 * 1024 * 1024) return rolloutError("Model files must be 32 MiB or smaller.");
+    const body = new FormData(); body.append("file", file);
+    changeRollout("/rollout/upload", body);
+  } else {
+    changeRollout(`/rollout/start/${document.querySelector('[name="preset"]:checked').value}`);
+  }
+});
+$("rollback-model").addEventListener("click", () => changeRollout("/rollout/rollback"));
+$("advance-model").addEventListener("click", () => changeRollout("/rollout/advance"));
+document.querySelectorAll('[name="model-source"], #model-file').forEach((input) => input.addEventListener("change", () => { rolloutError(""); syncRolloutControls(); }));
+$("show-rollout").addEventListener("click", () => {
+  $("rollout-panel").scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+  $("rollout-panel").focus({ preventScroll: true });
+});
+refreshRollout();
+setInterval(refreshRollout, 800);

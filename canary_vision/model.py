@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
@@ -17,6 +18,7 @@ MODEL_VERSION = "mobilenet-v3-small-imagenet1k-v1-047dcff4"
 WEIGHTS_NAME = "mobilenet_v3_small-047dcff4.pth"
 WEIGHTS_SHA256 = "047dcff4addef86ea5bc2eff13c9614dc11f47ab1160d0a71a25e7db994f4e1f"
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[1] / ".cache" / "models" / WEIGHTS_NAME
+MAX_MODEL_BYTES = 32 * 1024 * 1024
 
 
 def model_path() -> Path:
@@ -27,6 +29,8 @@ class Classifier:
     """CPU classifier using checksum-verified local weights."""
 
     version = MODEL_VERSION
+    weights_sha256 = WEIGHTS_SHA256
+    weights_name = "IMAGENET1K_V1"
 
     def __init__(self, path: Path | None = None) -> None:
         path = path or model_path()
@@ -48,6 +52,31 @@ class Classifier:
         with torch.inference_mode():
             self._model(torch.zeros(1, 3, 224, 224))
         LOGGER.info("Loaded %s on CPU; weights sha256=%s", self.version, digest)
+
+    @classmethod
+    def from_upload(cls, data: bytes):
+        """Load a tensor-only state dict for the same architecture and label order."""
+        instance = cls.__new__(cls)
+        instance.weights_sha256 = hashlib.sha256(data).hexdigest()
+        instance.weights_name = "Uploaded state dict"
+        instance.version = f"mobilenet-v3-small-custom-{instance.weights_sha256[:12]}"
+        weights = torch.load(BytesIO(data), map_location="cpu", weights_only=True)
+        if not isinstance(weights, dict) or not all(
+            isinstance(value, torch.Tensor) and torch.isfinite(value).all()
+            for value in weights.values()
+        ):
+            raise ValueError("Expected a state dict containing finite tensors only.")
+        instance._model = mobilenet_v3_small(weights=None).to("cpu")
+        instance._model.load_state_dict(weights, strict=True)
+        instance._model.eval()
+        instance._transform = WEIGHTS.transforms()
+        instance._labels = WEIGHTS.meta["categories"]
+        instance._lock = Lock()
+        with torch.inference_mode():
+            output = instance._model(torch.zeros(1, 3, 224, 224))
+            if not torch.isfinite(output).all():
+                raise ValueError("Model produces non-finite predictions.")
+        return instance
 
     def predict(self, image: Image.Image) -> dict:
         # Queueing is excluded; preprocessing, forward pass, and scoring are included.
@@ -77,6 +106,8 @@ class Release:
         self.classifier = classifier
         self.name = name
         self.version = classifier.version + (f"-{name}-v2" if name != "stable" else "")
+        self.weights_sha256 = getattr(classifier, "weights_sha256", WEIGHTS_SHA256)
+        self.weights_name = getattr(classifier, "weights_name", "IMAGENET1K_V1")
         labels = WEIGHTS.meta["categories"]
         self._mapping = dict(zip(labels, labels[1:] + labels[:1], strict=True))
 

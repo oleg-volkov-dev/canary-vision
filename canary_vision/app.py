@@ -18,7 +18,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from canary_vision import __version__
 from canary_vision.images import MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, decode_image
-from canary_vision.model import WEIGHTS, WEIGHTS_SHA256, Classifier
+from canary_vision.model import MAX_MODEL_BYTES, WEIGHTS, Classifier
 from canary_vision.rollout import Rollout
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,12 +53,19 @@ class BodyLimitMiddleware:
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self.limit = MAX_UPLOAD_BYTES + 64 * 1024  # Room for multipart headers.
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        model_upload = scope.get("path") == "/rollout/upload"
+        limit = (MAX_MODEL_BYTES if model_upload else MAX_UPLOAD_BYTES) + 64 * 1024
+        code = "model_too_large" if model_upload else "image_too_large"
+        message = (
+            "Model files must be 32 MiB or smaller."
+            if model_upload
+            else "Images must be 10 MB or smaller."
+        )
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length")
         if content_length:
@@ -74,26 +81,24 @@ class BodyLimitMiddleware:
                     scope, receive, send
                 )
                 return
-            if length > self.limit:
-                await error_response(413, "image_too_large", "Images must be 10 MB or smaller.")(
-                    scope, receive, send
-                )
+            if length > limit:
+                await error_response(413, code, message)(scope, receive, send)
                 return
         received = 0
 
         async def bounded_receive() -> dict:
             nonlocal received
-            message = await receive()
-            received += len(message.get("body", b""))
-            if received > self.limit:
+            chunk = await receive()
+            received += len(chunk.get("body", b""))
+            if received > limit:
                 raise HTTPException(
                     413,
                     detail={
-                        "code": "image_too_large",
-                        "message": "Images must be 10 MB or smaller.",
+                        "code": code,
+                        "message": message,
                     },
                 )
-            return message
+            return chunk
 
         await self.app(scope, bounded_receive, send)
 
@@ -101,9 +106,13 @@ class BodyLimitMiddleware:
 def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.classifier = Rollout(classifier_factory(), ROOT / "evaluation" / "manifest.json")
-        yield
-        app.state.classifier = None
+        rollout = Rollout(classifier_factory(), ROOT / "evaluation" / "manifest.json")
+        app.state.classifier = rollout
+        try:
+            yield
+        finally:
+            rollout.close()
+            app.state.classifier = None
 
     app = FastAPI(
         title="CanaryVision",
@@ -123,7 +132,7 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
         if request.url.path.startswith("/rollout/"):
-            return error_response(422, "invalid_action", "Choose good, bad, advance, or rollback.")
+            return error_response(422, "invalid_action", "Choose a preset or upload a model file.")
         return error_response(
             422, "invalid_request", "Send an image in the multipart field named 'file'."
         )
@@ -144,11 +153,12 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
 
     @app.get("/model", tags=["Service"])
     def model_info(request: Request):
+        stable = request.app.state.classifier.snapshot()
         return {
             "name": "MobileNetV3 Small",
-            "model_version": request.app.state.classifier.snapshot()["stable_version"],
-            "weights": "IMAGENET1K_V1",
-            "weights_sha256": WEIGHTS_SHA256,
+            "model_version": stable["stable_version"],
+            "weights": stable["stable_weights_name"],
+            "weights_sha256": stable["stable_weights_sha256"],
             "device": "cpu",
             "classes": len(WEIGHTS.meta["categories"]),
             "parameters": WEIGHTS.meta["num_params"],
@@ -161,6 +171,34 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
     @app.get("/rollout", tags=["Rollout"])
     def rollout_status(request: Request):
         return request.app.state.classifier.snapshot()
+
+    @app.post("/rollout/start/{preset}", tags=["Rollout"])
+    def rollout_start(preset: Literal["good", "bad"], request: Request):
+        return request.app.state.classifier.change(preset, automatic=True)
+
+    @app.post("/rollout/upload", tags=["Rollout"])
+    def rollout_upload(request: Request, file: Annotated[UploadFile, File()]):
+        def load_candidate():
+            data = file.file.read(MAX_MODEL_BYTES + 1)
+            if len(data) > MAX_MODEL_BYTES:
+                raise HTTPException(413, "Model files must be 32 MiB or smaller.")
+            if not data:
+                raise HTTPException(422, "The model file is empty.")
+            try:
+                return Classifier.from_upload(data)
+            except Exception as exc:
+                raise HTTPException(
+                    422,
+                    "Could not load model. Upload a MobileNetV3 Small state dict (.pth/.pt) "
+                    "with 1,000 ImageNet classes and finite tensor weights.",
+                ) from exc
+
+        try:
+            return request.app.state.classifier.change(
+                "custom", automatic=True, candidate_factory=load_candidate
+            )
+        finally:
+            file.file.close()
 
     @app.post("/rollout/{action}", tags=["Rollout"])
     def rollout_change(action: Literal["good", "bad", "advance", "rollback"], request: Request):
