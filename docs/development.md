@@ -40,7 +40,8 @@ serializes forward passes within each process.
 The API checks the decoded image format, applies EXIF orientation, and converts
 images to RGB. Empty, corrupt, animated, and unsupported images are rejected.
 The request body is limited before multipart parsing, including streamed uploads,
-with a 64 KiB allowance for multipart overhead. The parser may temporarily spool
+with a 64 KiB allowance for multipart overhead. Model uploads to `/rollout/upload`
+have a separate 32 MiB limit; image uploads retain their 10 MiB limit. The parser may temporarily spool
 larger uploads to disk; file handles are closed after processing.
 
 Errors use `{"error": {"code": "...", "message": "..."}}`:
@@ -94,7 +95,7 @@ are saved under `artifacts/browser/`.
 
 The check covers file selection, drag and drop, sample images, inference, JSON
 export, input replacement, validation errors, API failures, dialogs, and mobile
-overflow. [Mobile screenshot](mobile.png).
+overflow, automatic promotion and rollback, and custom model upload validation. [Mobile screenshot](mobile.png).
 
 ## Docker checks
 

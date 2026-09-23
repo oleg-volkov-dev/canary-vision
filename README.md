@@ -25,30 +25,47 @@ For native setup, configuration, and browser checks, see the
 
 ## Canary rollout
 
-Open **Canary rollout** in the sidebar (or **Manage canary rollout** below the
-playground). Start a good or bad release, then use **Check and advance**:
+The **Roll out a new model** panel shows your current stable model alongside two
+presets. Select **Reliable release** (good) or **Broken labels** (bad), then click
+**Roll out selected model**. The traffic bar, stage tracker, and accuracy results
+update as the rollout runs:
 
-- Candidate uploads receive 10%, then 50%, then 100% of traffic, selected randomly
-  per request. Each prediction identifies the release that served it.
-- Each advance evaluates the candidate directly against the fixed dataset. Both
-  accuracy gates must pass; a final check at 100% promotes the candidate.
-- A failed gate or evaluation error withdraws the candidate and restores all new
-  requests to the previous stable release. Manual rollback is also available
-  while a candidate is active. Requests already running may finish on that candidate.
+- The good preset passes the gates at **10% → 50% → 100%** traffic, then becomes
+  the stable model. Each stage waits two seconds before checking the fixed dataset.
+- The bad preset fails its first gate and **automatically rolls back**. The panel
+  keeps the failed results visible and shows 100% of traffic restored to the
+  previous stable model.
+- **Roll back now** stops a candidate between checks. New requests return to the
+  stable model; requests already running may finish on the candidate.
 
-The good release preserves baseline behavior. The deliberately bad release shifts
-ImageNet labels by one position, reproducing a label-map packaging defect while
-sharing the same verified weights. No extra weights or downloads are needed.
+The presets share the verified MobileNetV3 Small weights. The good release
+preserves baseline behavior; the deliberately bad release shifts ImageNet labels
+by one position, reproducing a label-map packaging defect. No extra downloads are
+needed. The current-model card updates after promotion, and presets can be rerun.
+
+Choose **Load your own** to upload a **MobileNetV3 Small state dict** (`.pth` or
+`.pt`, up to **32 MiB**), exported with `torch.save(model.state_dict(), "model.pth")`.
+It must match the existing architecture, standard 1,000 ImageNet classes and label
+order, and preprocessing. Loading uses `weights_only=True`, checks tensor values
+and architecture, and warms the model before starting the same gated rollout.
+Invalid files leave the stable model unchanged. Arbitrary architectures, full
+pickled models, and custom label maps are not supported. Weights remain in memory
+for the session; uploaded model files are closed after loading.
 
 ```sh
-curl -X POST http://localhost:8000/rollout/bad
-curl -X POST http://localhost:8000/rollout/advance
+# Starts an automatic rollout; no advance calls needed.
+curl -X POST http://localhost:8000/rollout/start/bad
 curl http://localhost:8000/rollout
+
+# Upload compatible weights and start automatic checks.
+curl -F 'file=@model.pth' http://localhost:8000/rollout/upload
 ```
 
-The second command returns `rolled_back` with the failing evaluation report.
-For a successful rollout, start `good` and advance three times. To evaluate the
-bad release offline (expected exit code **1**):
+Automatic checks run on the server and continue when the browser closes. For
+manual stage control through the API, `POST /rollout/good` or `/rollout/bad`
+starts a candidate; `POST /rollout/advance` evaluates and advances one stage.
+A successful manual rollout takes three advances. To evaluate the bad preset
+offline (expected exit code **1**):
 
 ```sh
 uv run --frozen python -m scripts.evaluate --release bad --output artifacts/bad-evaluation.json
@@ -57,8 +74,7 @@ uv run --frozen python -m scripts.evaluate --release bad --output artifacts/bad-
 This is a local, single-process rollout lab. Run one Uvicorn worker; state and
 reports are kept in memory and restart resets to the original stable release.
 Controls are unauthenticated and intended for the loopback-bound local service.
-Advancement is operator-triggered; rollback after a failed check is automatic.
-The gate uses labeled samples, not accuracy inferred from user uploads. The
+The gate uses four labeled samples, not accuracy inferred from user uploads. The
 bundled `/evaluation` report continues to describe the original baseline.
 
 ## API
@@ -91,7 +107,9 @@ Example response; timing varies by machine:
 | `GET /model` | Model metadata and input limits. |
 | `GET /evaluation` | Recorded evaluation report. |
 | `GET /rollout` | Current traffic split, release versions, and gate reports. |
-| `POST /rollout/{action}` | `good`, `bad`, `advance`, or `rollback`. |
+| `POST /rollout/start/{preset}` | Start an automatic `good` or `bad` rollout. |
+| `POST /rollout/upload` | Upload compatible model weights and start an automatic rollout. |
+| `POST /rollout/{action}` | Manual control: `good`, `bad`, `advance`, or `rollback`. |
 | `GET /samples` | Sample images and attribution. |
 
 Accepts static JPEG, PNG, and WebP images up to **10 MiB** and **20 megapixels**.
