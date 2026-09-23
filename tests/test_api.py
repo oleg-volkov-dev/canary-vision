@@ -197,3 +197,18 @@ def test_model_metadata(client):
     assert result["classes"] == 1000
     assert result["model_version"] == MODEL_VERSION
     assert result["max_upload_bytes"] == MAX_UPLOAD_BYTES
+
+
+def test_frontend_assets_are_versioned_and_html_is_not_cached(client):
+    import hashlib
+    import re
+
+    response = client.get("/")
+    assert response.headers["cache-control"] == "no-store"
+    assets = re.findall(r"/static/(?:app\.js|styles\.css)\?v=([a-f0-9]+)", response.text)
+    assert len(assets) == 2 and assets[0] == assets[1]
+    javascript = client.get(f"/static/app.js?v={assets[0]}")
+    stylesheet = client.get(f"/static/styles.css?v={assets[1]}")
+    assert javascript.status_code == stylesheet.status_code == 200
+    assert assets[0] == hashlib.sha256(javascript.content + stylesheet.content).hexdigest()[:16]
+    assert "__ASSET_VERSION__" not in response.text

@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 from pathlib import Path
+from time import sleep
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -28,7 +29,9 @@ def main() -> None:
         page.goto(args.url)
         expect(page.locator("#service-status")).to_have_text("Service ready")
         expect(page.locator("#run-inference")).to_be_disabled()
-        page.screenshot(path=str(output / "empty.png"), full_page=True)
+        expect(page.locator("#rollout-view")).to_be_hidden()
+        expect(page.locator("#playground-view")).to_be_visible()
+        page.screenshot(path=str(output / "empty.png"), full_page=True, animations="disabled")
 
         # File upload, inference, and JSON export.
         page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
@@ -44,7 +47,7 @@ def main() -> None:
         download.value.save_as(str(output / "prediction.json"))
         result = json.loads((output / "prediction.json").read_text())
         assert result["predictions"][0]["label"] == "espresso"
-        page.screenshot(path=str(output / "playground.png"), full_page=True)
+        page.screenshot(path=str(output / "playground.png"), full_page=True, animations="disabled")
 
         # Replacing input must clear previous predictions instead of showing stale data.
         page.locator("[data-sample='chelsea']").click()
@@ -111,8 +114,43 @@ def main() -> None:
 
         # Automatic presets show traffic, gate evidence, and the final outcome.
         page.locator("#show-rollout").click()
-        expect(page.locator(".model-option")).to_have_count(3)
+        expect(page.locator("#playground-view")).to_be_hidden()
+        expect(page.locator("#rollout-view")).to_be_visible()
+        expect(page.locator("#show-rollout")).to_have_attribute("aria-current", "page")
+        expect(page.locator(".model-option")).to_have_count(2)
+        assert (
+            page.locator("#model-options").evaluate("el => getComputedStyle(el).display") == "grid"
+        )
+        expect(page.locator("#start-rollout")).to_be_enabled()
+        page.screenshot(
+            path=str(output / "rollout-choice.png"), full_page=True, animations="disabled"
+        )
+
+        # Slow status responses must eventually render instead of being discarded.
+        def slow_status(route):
+            response = route.fetch()
+            sleep(1.4)
+            route.fulfill(response=response)
+
+        page.route("**/rollout", slow_status, times=1)
+        page.reload()
+        expect(page.locator("#start-rollout")).to_be_enabled(timeout=10000)
+        expect(page.locator("#rollout-connection")).to_be_hidden()
+        page.unroute("**/rollout")
+
+        # Connection failures explain the disabled action but allow model selection.
+        page.route("**/rollout", lambda route: route.fulfill(status=503, body="offline"))
+        expect(page.locator("#rollout-connection")).to_contain_text("Cannot reach", timeout=10000)
         page.locator('[name="preset"][value="bad"]').check()
+        expect(page.locator("#selected-model-name")).to_have_text("Broken labels")
+        expect(page.locator("#start-rollout")).to_be_disabled()
+        page.unroute("**/rollout")
+        expect(page.locator("#start-rollout")).to_be_enabled(timeout=10000)
+        page.locator("#show-playground").click()
+        page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
+        page.locator("#show-rollout").click()
+        page.locator(".bad-model .model-name").click()
+        expect(page.locator("#start-rollout")).to_contain_text("broken labels")
         page.locator("#start-rollout").click()
         expect(page.locator("#traffic-caption")).to_contain_text("Candidate 10%")
         expect(page.locator("#rollout-result-title")).to_contain_text(
@@ -123,11 +161,17 @@ def main() -> None:
         page.wait_for_function(
             "document.getElementById('candidate-traffic').getBoundingClientRect().width < 1"
         )
-        page.screenshot(path=str(output / "rollback.png"), full_page=True)
-        page.locator('[name="preset"][value="good"]').check()
+        page.screenshot(path=str(output / "rollback.png"), full_page=True, animations="disabled")
+        page.locator(".good-model .model-name").click()
         page.locator("#start-rollout").click()
+        page.locator("#show-playground").click()
+        expect(page.locator("#rollout-view")).to_be_hidden()
+        expect(page.locator("#file-name")).to_have_text("coffee.png")
+        page.locator("#show-rollout").click()
         expect(page.locator("#traffic-caption")).to_contain_text("Candidate 50%", timeout=15000)
-        page.screenshot(path=str(output / "rollout-progress.png"), full_page=True)
+        page.screenshot(
+            path=str(output / "rollout-progress.png"), full_page=True, animations="disabled"
+        )
         expect(page.locator("#rollout-result-title")).to_contain_text(
             "Rollout successful", timeout=20000
         )
@@ -136,12 +180,18 @@ def main() -> None:
         page.wait_for_function(
             "document.getElementById('candidate-traffic').getBoundingClientRect().width < 1"
         )
-        page.screenshot(path=str(output / "rollout.png"), full_page=True)
+        page.screenshot(path=str(output / "rollout.png"), full_page=True, animations="disabled")
 
         # Invalid custom weights leave the promoted model in place and allow retry.
         page.locator('[name="model-source"][value="upload"]').check()
         expect(page.locator("#start-rollout")).to_be_disabled()
-        page.locator("#model-file").set_input_files(
+        expect(page.locator("#model-upload")).to_be_visible()
+        page.screenshot(
+            path=str(output / "rollout-upload.png"), full_page=True, animations="disabled"
+        )
+        with page.expect_file_chooser() as chooser:
+            page.get_by_text("Choose model file", exact=True).click()
+        chooser.value.set_files(
             {"name": "invalid.pth", "mimeType": "application/octet-stream", "buffer": b"bad"}
         )
         page.locator("#start-rollout").click()
@@ -160,6 +210,19 @@ def main() -> None:
         expect(page.locator("#current-model-name")).to_have_text("Your uploaded model")
         expect(page.locator(".gate-pass")).to_have_count(3)
         page.locator('[name="model-source"][value="preset"]').check()
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(page.locator("#rollout-view")).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(
+            path=str(output / "rollout-mobile.png"), full_page=True, animations="disabled"
+        )
+        page.locator("#show-playground").click()
+        expect(page.locator("#rollout-view")).to_be_hidden()
+        expect(page.locator("#show-playground")).to_have_attribute("aria-current", "page")
+        page.go_back()
+        expect(page.locator("#rollout-view")).to_be_visible()
+        page.go_forward()
+        expect(page.locator("#playground-view")).to_be_visible()
         page.locator("#file-input").set_input_files("evaluation/images/coffee.png")
 
         page.set_viewport_size({"width": 390, "height": 844})
@@ -168,7 +231,7 @@ def main() -> None:
         expect(page.locator("#run-inference")).to_be_enabled()
         expect(page.locator(".prediction")).to_have_count(3)
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-        page.screenshot(path=str(output / "mobile.png"), full_page=True)
+        page.screenshot(path=str(output / "mobile.png"), full_page=True, animations="disabled")
         browser.close()
     assert not errors, errors
     print(f"Browser workflow passed. Screenshots: {output}")

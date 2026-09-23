@@ -25,10 +25,11 @@ For native setup, configuration, and browser checks, see the
 
 ## Canary rollout
 
-The **Roll out a new model** panel shows your current stable model alongside two
-presets. Select **Reliable release** (good) or **Broken labels** (bad), then click
-**Roll out selected model**. The traffic bar, stage tracker, and accuracy results
-update as the rollout runs:
+Open **Canary rollout** in the sidebar. Its dedicated workspace shows your current
+model, a model chooser, and live rollout progress. The **Playground** tab stays
+focused on image classification. Select **Reliable release** (good) or **Broken
+labels** (bad), then click the **Roll out** button for that model. The traffic bar,
+stage tracker, and accuracy results update as the rollout runs:
 
 - The good preset passes the gates at **10% → 50% → 100%** traffic, then becomes
   the stable model. Each stage waits two seconds before checking the fixed dataset.
