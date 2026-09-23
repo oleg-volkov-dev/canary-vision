@@ -434,6 +434,7 @@ window.addEventListener("drop", (event) => event.preventDefault());
 document.addEventListener("keydown", (event) => {
   if (
     event.key === "Enter" &&
+    !$("playground-view").hidden &&
     !$("info-dialog").open &&
     !["BUTTON", "A", "INPUT"].includes(document.activeElement.tagName)
   ) {
@@ -463,37 +464,122 @@ fetchJson("/model")
   })
   .catch(() => {});
 
-const rollout = { data: null, busy: false, request: 0, checks: "", connected: false };
+const rollout = {
+  data: null,
+  busy: false,
+  request: 0,
+  checks: "",
+  connected: false,
+  polling: false,
+};
 const percent = (value) => `${Math.round(value * 100)}%`;
+
+function modelLabel(version) {
+  if (version?.includes("custom")) return "Your uploaded model";
+  if (version?.includes("good")) return "Reliable release";
+  if (version?.includes("bad")) return "Broken labels";
+  return "Baseline";
+}
+
 function rolloutError(message) {
   $("rollout-error").textContent = message;
   $("rollout-error").hidden = !message;
 }
+
 function syncRolloutControls() {
   const active = Boolean(rollout.data?.candidate_version);
-  const locked = rollout.busy || active || !rollout.connected;
+  const locked = rollout.busy || active;
+  const upload = document.querySelector('[name="model-source"]:checked').value === "upload";
+  const preset = document.querySelector('[name="preset"]:checked').value;
+  const file = $("model-file").files[0];
   document.querySelectorAll('#model-source input, [name="preset"], #model-file')
     .forEach((input) => { input.disabled = locked; });
-  const upload = document.querySelector('[name="model-source"]:checked').value === "upload";
   $("model-options").hidden = upload;
   $("model-upload").hidden = !upload;
-  $("start-rollout").disabled = locked || (upload && !$("model-file").files.length);
-  $("start-rollout").textContent = rollout.busy ? "Working…" : active ? "Rollout in progress…" : "Roll out selected model →";
+  $("model-file-name").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MiB` : "No file selected";
+  const selected = upload ? (file?.name || "Choose a model file") : preset === "good" ? "Reliable release" : "Broken labels";
+  $("selected-model-name").textContent = active ? modelLabel(rollout.data.candidate_version) : selected;
+  $("selected-model-description").textContent = active
+    ? "Rollout in progress. You can return to the playground while the checks run."
+    : upload
+      ? "Compatible weights will be checked before receiving more traffic."
+      : preset === "good"
+        ? "Expected to pass all three checks and become your current model."
+        : "Expected to fail the first check and automatically restore your current model.";
+  $("start-rollout").disabled = locked || !rollout.connected || (upload && !file);
+  $("start-rollout").textContent = rollout.busy ? "Starting rollout…"
+    : active ? "Rollout in progress…"
+      : upload ? "Roll out uploaded model →"
+        : preset === "good" ? "Roll out reliable release →" : "Roll out broken labels →";
   $("rollback-model").hidden = !active;
-  $("rollback-model").disabled = rollout.busy || !rollout.connected || rollout.data?.status === "evaluating";
   $("advance-model").hidden = !active || rollout.data?.automatic;
-  $("advance-model").disabled = rollout.busy || !rollout.connected || rollout.data?.status === "evaluating";
+  const checking = rollout.data?.status === "evaluating";
+  $("rollback-model").disabled = rollout.busy || !rollout.connected || checking;
+  $("advance-model").disabled = rollout.busy || !rollout.connected || checking;
 }
+
+function renderRolloutChecks(checks) {
+  const signature = JSON.stringify(checks);
+  if (rollout.checks === signature) return;
+  rollout.checks = signature;
+  const container = $("rollout-checks");
+  container.replaceChildren();
+  if (!checks.length) return;
+  const table = document.createElement("table");
+  table.className = "gate-table";
+  table.createCaption().textContent = "Accuracy checks · fixed sample dataset";
+  const head = table.createTHead().insertRow();
+  ["Traffic", "Top-1", "Top-3", "Result"].forEach((label) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    head.append(cell);
+  });
+  const body = table.createTBody();
+  checks.forEach((check) => {
+    const row = body.insertRow();
+    row.className = check.passed ? "gate-pass" : "gate-fail";
+    [
+      `${check.candidate_percent}%`,
+      percent(check.top1_accuracy),
+      percent(check.top3_accuracy),
+      check.passed ? "Passed" : "Failed → rollback",
+    ].forEach((value) => { row.insertCell().textContent = value; });
+  });
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "See what the candidate predicted";
+  details.append(summary);
+  checks.at(-1).results.forEach((sample) => {
+    details.append(paragraph(
+      `${sample.id}: ${sample.predictions[0].label} — expected ${sample.expected_labels.join(" or ")} (${sample.top1_correct ? "correct" : "miss"})`,
+    ));
+  });
+  container.append(table, details);
+}
+
 function renderRolloutPanel(data) {
+  // Reopening or refreshing a running rollout should show its actual source.
+  if (data.candidate_version && data.candidate_version !== rollout.data?.candidate_version) {
+    const custom = data.candidate_version.includes("custom");
+    document.querySelector(`[name="model-source"][value="${custom ? "upload" : "preset"}"]`).checked = true;
+    if (!custom) {
+      const preset = data.candidate_version.includes("bad") ? "bad" : "good";
+      document.querySelector(`[name="preset"][value="${preset}"]`).checked = true;
+    }
+  }
   rollout.data = data;
   const active = Boolean(data.candidate_version);
   const failed = data.status === "rolled_back";
   const promoted = data.status === "promoted";
   const traffic = data.candidate_percent;
-  const names = { idle: "Stable", canary: "Rolling out", evaluating: "Checking accuracy", promoted: "Promoted", rolled_back: "Rolled back" };
+  const names = {
+    idle: "Stable", canary: "Rolling out", evaluating: "Checking",
+    promoted: "Promoted", rolled_back: "Rolled back",
+  };
   $("rollout-badge").textContent = names[data.status] || data.status;
   $("rollout-panel").dataset.status = data.status;
-  $("current-model-name").textContent = data.stable_version.includes("custom") ? "Your uploaded model" : data.stable_version.includes("good") ? "Reliable release" : "Baseline";
+  $("current-model-name").textContent = modelLabel(data.stable_version);
   $("current-model-version").textContent = data.stable_version;
   const caption = `Stable ${100 - traffic}% · Candidate ${traffic}%`;
   $("traffic-caption").textContent = caption;
@@ -504,75 +590,64 @@ function renderRolloutPanel(data) {
     const check = data.checks.find((item) => item.candidate_percent === Number(stage.dataset.stage));
     const current = active && traffic === Number(stage.dataset.stage);
     stage.dataset.state = check ? (check.passed ? "passed" : "failed") : current ? "active" : "waiting";
-    stage.querySelector("small").textContent = check ? (check.passed ? "✓ Gate passed" : "× Gate failed") : current ? (data.automatic ? "Checking accuracy…" : "Awaiting check") : failed ? "Skipped" : "Waiting";
+    stage.querySelector("small").textContent = check
+      ? (check.passed ? "✓ Passed" : "× Failed")
+      : current ? (data.automatic ? "Checking…" : "Awaiting check")
+        : failed ? "Skipped" : "Waiting";
     if (current) stage.setAttribute("aria-current", "step");
     else stage.removeAttribute("aria-current");
   });
   const finalStage = $("rollout-final-stage");
   finalStage.dataset.state = promoted ? "passed" : failed ? "failed" : "waiting";
   finalStage.querySelector("span").textContent = failed ? "Restore stable" : "Promote model";
-  finalStage.querySelector("small").textContent = promoted ? "✓ Model is live" : failed ? "↶ Traffic restored" : "Waiting";
-  let title = "Ready for a new release";
-  let detail = "Start with the good preset to see a successful rollout, or the bad preset to see traffic automatically return to your stable model.";
+  finalStage.querySelector("small").textContent = promoted ? "✓ Live" : failed ? "↶ Restored" : "Waiting";
+  let title = "Ready when you are";
+  let detail = "Choose a model and start a rollout. Progress and check results will appear here.";
   if (active) {
-    title = `${traffic}% of traffic routed to the candidate`;
-    detail = `${data.candidate_version} · ${data.automatic ? "Accuracy gates run automatically. You can keep using the playground or leave this page." : "Use Check and advance to evaluate this manually started rollout."}`;
+    title = `${traffic}% of traffic goes to ${modelLabel(data.candidate_version).toLowerCase()}`;
+    detail = data.automatic
+      ? "Checks run automatically. If accuracy drops below the gate, traffic returns to your current model."
+      : "Use Check and advance to evaluate this manually started rollout.";
   } else if (promoted) {
     title = "Rollout successful — new model is live";
-    detail = `All three accuracy checks passed. ${data.stable_version} now serves 100% of traffic.`;
+    detail = `${modelLabel(data.stable_version)} passed all three checks and now serves 100% of traffic.`;
   } else if (failed) {
-    title = data.reason?.startsWith("Manual") ? "Rollout stopped — stable model restored" : "Automatic rollback — stable model restored";
-    detail = `${data.reason} ${data.last_candidate_version} was withdrawn. ${data.stable_version} serves 100% of traffic.`;
+    title = data.reason?.startsWith("Manual")
+      ? "Rollout stopped — stable model restored"
+      : "Automatic rollback — stable model restored";
+    detail = `${modelLabel(data.last_candidate_version)} was withdrawn. ${modelLabel(data.stable_version)} serves 100% of traffic. ${data.reason}`;
   }
   if ($("rollout-result-title").textContent !== title) $("rollout-result-title").textContent = title;
   if ($("rollout-result-detail").textContent !== detail) $("rollout-result-detail").textContent = detail;
-  const checks = JSON.stringify(data.checks);
-  if (rollout.checks !== checks) {
-    rollout.checks = checks;
-    const container = $("rollout-checks");
-    container.replaceChildren();
-    if (data.checks.length) {
-      const table = document.createElement("table");
-      table.className = "gate-table";
-      const caption = table.createCaption();
-      caption.textContent = "Accuracy checks · fixed sample dataset";
-      const head = table.createTHead().insertRow();
-      ["Traffic", "Top-1", "Top-3", "Result"].forEach((label) => {
-        const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; head.append(cell);
-      });
-      const body = table.createTBody();
-      data.checks.forEach((check) => {
-        const row = body.insertRow();
-        row.className = check.passed ? "gate-pass" : "gate-fail";
-        [`${check.candidate_percent}%`, `${percent(check.top1_accuracy)} / ${percent(check.min_top1_accuracy)} min`, `${percent(check.top3_accuracy)} / ${percent(check.min_top3_accuracy)} min`, check.passed ? "Passed" : "Failed → rollback"].forEach((value) => { row.insertCell().textContent = value; });
-      });
-      container.append(table);
-      const last = data.checks.at(-1);
-      const details = document.createElement("details");
-      const summary = document.createElement("summary");
-      summary.textContent = "See what the candidate predicted";
-      details.append(summary);
-      last.results.forEach((sample) => details.append(paragraph(`${sample.id}: ${sample.predictions[0].label} — expected ${sample.expected_labels.join(" or ")} (${sample.top1_correct ? "correct" : "miss"})`)));
-      container.append(details);
-    }
-  }
+  renderRolloutChecks(data.checks);
   syncRolloutControls();
 }
+
 async function refreshRollout() {
-  if (rollout.busy) return;
-  const request = ++rollout.request;
+  // Keep one poll in flight; slow responses must not invalidate each other.
+  if (rollout.busy || rollout.polling) return;
+  rollout.polling = true;
+  const request = rollout.request;
   try {
-    const data = await fetchJson("/rollout", { signal: AbortSignal.timeout(5000) });
+    const data = await fetchJson("/rollout", {
+      cache: "no-store", signal: AbortSignal.timeout(5000),
+    });
     if (request !== rollout.request) return;
     rollout.connected = true;
+    $("rollout-connection").hidden = true;
     renderRolloutPanel(data);
-  } catch (error) {
+  } catch {
     if (request !== rollout.request) return;
     rollout.connected = false;
-    $("rollout-badge").textContent = "Connection lost · retrying";
+    $("rollout-badge").textContent = "Offline";
+    $("rollout-connection").textContent = "Cannot reach the rollout service. You can choose a model while we reconnect; starting a rollout will be available when the connection returns.";
+    $("rollout-connection").hidden = false;
     syncRolloutControls();
+  } finally {
+    rollout.polling = false;
   }
 }
+
 async function changeRollout(path, body) {
   if (rollout.busy) return;
   rollout.busy = true;
@@ -582,6 +657,7 @@ async function changeRollout(path, body) {
   try {
     const data = await fetchJson(path, { method: "POST", ...(body ? { body } : {}) });
     rollout.connected = true;
+    $("rollout-connection").hidden = true;
     renderRolloutPanel(data);
   } catch (error) {
     rolloutError(error.message);
@@ -591,23 +667,51 @@ async function changeRollout(path, body) {
     await refreshRollout();
   }
 }
+
 $("start-rollout").addEventListener("click", () => {
-  if (document.querySelector('[name="model-source"]:checked').value === "upload") {
+  const upload = document.querySelector('[name="model-source"]:checked').value === "upload";
+  if (upload) {
     const file = $("model-file").files[0];
-    if (!file || file.size === 0) return rolloutError("Choose a non-empty model file.");
+    if (!file || !file.size) return rolloutError("Choose a non-empty model file.");
     if (file.size > 32 * 1024 * 1024) return rolloutError("Model files must be 32 MiB or smaller.");
-    const body = new FormData(); body.append("file", file);
+    const body = new FormData();
+    body.append("file", file);
     changeRollout("/rollout/upload", body);
   } else {
-    changeRollout(`/rollout/start/${document.querySelector('[name="preset"]:checked').value}`);
+    const preset = document.querySelector('[name="preset"]:checked').value;
+    changeRollout(`/rollout/start/${preset}`);
   }
 });
 $("rollback-model").addEventListener("click", () => changeRollout("/rollout/rollback"));
 $("advance-model").addEventListener("click", () => changeRollout("/rollout/advance"));
-document.querySelectorAll('[name="model-source"], #model-file').forEach((input) => input.addEventListener("change", () => { rolloutError(""); syncRolloutControls(); }));
-$("show-rollout").addEventListener("click", () => {
-  $("rollout-panel").scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
-  $("rollout-panel").focus({ preventScroll: true });
-});
+document.querySelectorAll('[name="model-source"], [name="preset"], #model-file')
+  .forEach((input) => input.addEventListener("change", () => {
+    rolloutError("");
+    syncRolloutControls();
+  }));
+
+function showWorkspace(focus = false) {
+  const isRollout = location.hash === "#rollout";
+  $("playground-view").hidden = isRollout;
+  $("rollout-view").hidden = !isRollout;
+  $("current-page").textContent = isRollout ? "Canary rollout" : "Playground";
+  document.title = `CanaryVision · ${isRollout ? "Canary rollout" : "Inference playground"}`;
+  [$("show-playground"), $("show-rollout")].forEach((link) => {
+    const selected = link.id === (isRollout ? "show-rollout" : "show-playground");
+    link.classList.toggle("active", selected);
+    if (selected) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  if (focus) {
+    window.scrollTo({ top: 0, behavior: "instant" });
+    $(isRollout ? "rollout-title" : "page-title").focus({ preventScroll: true });
+  }
+  if (isRollout) refreshRollout();
+}
+window.addEventListener("hashchange", () => showWorkspace(true));
+showWorkspace();
+syncRolloutControls();
 refreshRollout();
-setInterval(refreshRollout, 800);
+setInterval(() => {
+  if (!$("rollout-view").hidden || rollout.data?.candidate_version) refreshRollout();
+}, 1000);

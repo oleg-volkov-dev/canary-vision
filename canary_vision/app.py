@@ -1,5 +1,6 @@
 """Same-origin webpage and CPU inference API."""
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable
@@ -10,7 +11,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -267,7 +268,12 @@ def create_app(classifier_factory: Callable = Classifier) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(ROOT / "canary_vision" / "static" / "index.html")
+        # A new release must not combine fresh HTML with a browser's older JS/CSS.
+        version = hashlib.sha256(
+            (static / "app.js").read_bytes() + (static / "styles.css").read_bytes()
+        ).hexdigest()[:16]
+        html = (static / "index.html").read_text().replace("__ASSET_VERSION__", version)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     static = ROOT / "canary_vision" / "static"
     if static.is_dir():
